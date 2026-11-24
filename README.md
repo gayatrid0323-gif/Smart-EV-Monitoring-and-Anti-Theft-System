@@ -45,3 +45,7 @@ The ESP32 reads simulated sensor values and analyses the vehicle's charging and 
 # Project Status
 
 Prototype simulation using Wokwi.
+## Wokwi Simulation
+
+[Click here to view the EV project](https://wokwi.com/projects/481565032199112705)
+
