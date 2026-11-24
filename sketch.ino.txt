@@ -1,0 +1,374 @@
+#define BLINKER_WIFI
+#include <WiFi.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Blinker.h>
+
+// -------- WIFI AND BLINKER --------
+char auth[] = "YOUR_BLINKER_AUTH_KEY";
+char ssid[] = "Wokwi-GUEST";
+char pswd[] = "";
+
+// Set to 1 after configuring your Blinker account.
+// Set to 0 for local-only Wokwi testing.
+#define USE_BLINKER 0
+
+#if USE_BLINKER
+BlinkerNumber VOLT("volt");
+BlinkerNumber CURR("curr");
+BlinkerNumber TEMP("temp");
+BlinkerText ALERT("alert");
+#endif
+
+// -------- LCD --------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// -------- SENSOR PINS --------
+#define VOLT_PIN 34
+#define CURR_PIN 35
+#define TEMP_PIN 32
+#define ACC_PIN 33
+#define LOAD_PIN 36
+#define PIR_PIN 19
+
+// -------- OUTPUT PINS --------
+#define BUZZER 25
+#define GREEN_LED 16
+#define YELLOW_LED 17
+#define RED_LED 18
+
+// -------- BUTTON PINS --------
+#define SECURITY_BUTTON 26
+#define RESET_BUTTON 27
+
+bool securityMode = false;
+bool theftAlert = false;
+
+bool oldSecurityButton = HIGH;
+bool oldResetButton = HIGH;
+
+unsigned long lastUpdate = 0;
+unsigned long lastBlinkerUpdate = 0;
+
+// Sensor readings
+float voltageValue;
+float currentValue;
+float temperatureValue;
+int accelerationValue;
+int motorLoadValue;
+
+String systemStatus = "NORMAL";
+
+// -------- SETUP --------
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(PIR_PIN, INPUT);
+
+  pinMode(BUZZER, OUTPUT);
+
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+
+  pinMode(SECURITY_BUTTON, INPUT_PULLUP);
+  pinMode(RESET_BUTTON, INPUT_PULLUP);
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("EV MONITORING");
+  lcd.setCursor(0, 1);
+  lcd.print("System Starting");
+
+  delay(1500);
+
+#if USE_BLINKER
+  // Give Wi-Fi a limited time to connect.
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, pswd);
+
+  unsigned long start = millis();
+
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - start < 8000) {
+    delay(200);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Blinker.begin(auth, ssid, pswd);
+    Serial.println("Blinker initialized");
+  } else {
+    Serial.println("WiFi unavailable - Local mode");
+  }
+#endif
+
+  lcd.clear();
+
+  Serial.println("EV Monitoring System Ready");
+}
+
+// -------- SENSOR READING --------
+void readSensors() {
+
+  int v = analogRead(VOLT_PIN);
+  int c = analogRead(CURR_PIN);
+  int t = analogRead(TEMP_PIN);
+  int a = analogRead(ACC_PIN);
+  int m = analogRead(LOAD_PIN);
+
+  // Simulated sensor scaling
+  voltageValue = (v / 4095.0) * 60.0;
+
+  currentValue = (c / 4095.0) * 50.0;
+
+  temperatureValue =
+      20.0 + (t / 4095.0) * 80.0;
+
+  accelerationValue =
+      map(a, 0, 4095, 0, 100);
+
+  motorLoadValue =
+      map(m, 0, 4095, 0, 100);
+}
+
+// -------- BUTTON CONTROL --------
+void checkButtons() {
+
+  bool securityButton =
+      digitalRead(SECURITY_BUTTON);
+
+  bool resetButton =
+      digitalRead(RESET_BUTTON);
+
+  if (oldSecurityButton == HIGH &&
+      securityButton == LOW) {
+
+    securityMode = !securityMode;
+
+    if (!securityMode) {
+      theftAlert = false;
+    }
+
+    Serial.println(
+      securityMode ?
+      "SECURITY ACTIVATED" :
+      "SECURITY DEACTIVATED"
+    );
+
+    delay(180);
+  }
+
+  if (oldResetButton == HIGH &&
+      resetButton == LOW) {
+
+    theftAlert = false;
+
+    Serial.println("Alarm reset");
+
+    delay(180);
+  }
+
+  oldSecurityButton = securityButton;
+  oldResetButton = resetButton;
+}
+
+// -------- CHARGING MONITORING --------
+bool checkCharging() {
+
+  if (currentValue > 35 ||
+      temperatureValue > 70 ||
+      voltageValue > 55) {
+
+    Serial.println("CHARGING WARNING");
+
+    return true;
+  }
+
+  return false;
+}
+
+// -------- DRIVER BEHAVIOUR --------
+bool checkDriverBehaviour() {
+
+  if (accelerationValue > 85) {
+    Serial.println("SUDDEN ACCELERATION");
+    return true;
+  }
+
+  if (accelerationValue < 10) {
+    Serial.println("SUDDEN BRAKING");
+    return true;
+  }
+
+  if (motorLoadValue > 85) {
+    Serial.println("EXCESSIVE MOTOR LOAD");
+    return true;
+  }
+
+  return false;
+}
+
+// -------- THEFT DETECTION --------
+void checkTheft() {
+
+  int movement = digitalRead(PIR_PIN);
+
+  if (securityMode && movement == HIGH) {
+
+    theftAlert = true;
+
+    Serial.println("!!! THEFT ALERT !!!");
+  }
+}
+
+// -------- DISPLAY --------
+void updateLCD() {
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+
+  if (theftAlert) {
+
+    lcd.print("THEFT ALERT!");
+
+  } else if (systemStatus == "WARNING") {
+
+    lcd.print("SYSTEM WARNING");
+
+  } else if (securityMode) {
+
+    lcd.print("SECURITY ACTIVE");
+
+  } else {
+
+    lcd.print("EV SYSTEM NORMAL");
+  }
+
+  lcd.setCursor(0, 1);
+
+  lcd.print("V:");
+  lcd.print(voltageValue, 1);
+
+  lcd.print(" I:");
+  lcd.print(currentValue, 1);
+}
+
+// -------- LED AND BUZZER --------
+void updateIndicators() {
+
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+
+  if (theftAlert) {
+
+    digitalWrite(RED_LED, HIGH);
+    tone(BUZZER, 2000);
+
+  } else if (systemStatus == "WARNING") {
+
+    digitalWrite(YELLOW_LED, HIGH);
+    noTone(BUZZER);
+
+  } else {
+
+    digitalWrite(GREEN_LED, HIGH);
+    noTone(BUZZER);
+  }
+}
+
+// -------- BLINKER DASHBOARD --------
+void updateBlinker() {
+
+#if USE_BLINKER
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    VOLT.print(voltageValue);
+    CURR.print(currentValue);
+    TEMP.print(temperatureValue);
+
+    if (theftAlert) {
+      ALERT.print("THEFT ALERT");
+    } else if (systemStatus == "WARNING") {
+      ALERT.print("SYSTEM WARNING");
+    } else {
+      ALERT.print("NORMAL");
+    }
+  }
+
+#endif
+}
+
+// -------- MAIN LOOP --------
+void loop() {
+
+#if USE_BLINKER
+  if (WiFi.status() == WL_CONNECTED) {
+    Blinker.run();
+  }
+#endif
+
+  checkButtons();
+
+  if (millis() - lastUpdate >= 1000) {
+
+    lastUpdate = millis();
+
+    readSensors();
+
+    bool chargingWarning = checkCharging();
+
+    bool driverWarning = checkDriverBehaviour();
+
+    checkTheft();
+
+    if (chargingWarning || driverWarning) {
+      systemStatus = "WARNING";
+    } else {
+      systemStatus = "NORMAL";
+    }
+
+    updateLCD();
+
+    updateIndicators();
+
+    Serial.println("--------------------");
+
+    Serial.print("Voltage: ");
+    Serial.println(voltageValue);
+
+    Serial.print("Current: ");
+    Serial.println(currentValue);
+
+    Serial.print("Temperature: ");
+    Serial.println(temperatureValue);
+
+    Serial.print("Acceleration: ");
+    Serial.println(accelerationValue);
+
+    Serial.print("Motor Load: ");
+    Serial.println(motorLoadValue);
+
+    Serial.print("Security: ");
+    Serial.println(securityMode ? "ON" : "OFF");
+
+    Serial.print("Theft Alert: ");
+    Serial.println(theftAlert ? "YES" : "NO");
+
+    Serial.println("--------------------");
+
+#if USE_BLINKER
+    if (WiFi.status() == WL_CONNECTED &&
+        millis() - lastBlinkerUpdate >= 3000) {
+
+      lastBlinkerUpdate = millis();
+      updateBlinker();
+    }
+#endif
+  }
+}
